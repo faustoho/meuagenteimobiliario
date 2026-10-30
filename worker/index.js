@@ -55,7 +55,12 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/admin/')) return env.ASSETS.fetch(request);
-    if (!env.ADMIN_PASSWORD || !env.SESSION_SECRET || !env.DB) return json({ error: 'Configuração administrativa incompleta.' }, 503);
+    const missingBindings = ['ADMIN_PASSWORD', 'SESSION_SECRET', 'DB'].filter(name => !env[name]);
+    if (missingBindings.length) {
+      // Registra apenas nomes de configurações ausentes; nunca registra valores secretos.
+      console.error('Admin: bindings ausentes na versão ativa:', missingBindings.join(', '));
+      return json({ error: 'Configuração administrativa incompleta.' }, 503);
+    }
     const route = url.pathname;
     if (route === '/api/admin/session' && request.method === 'GET') return json({ authenticated: await authorized(request, env) });
     if (route === '/api/admin/login' && request.method === 'POST') {
