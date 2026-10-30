@@ -34,19 +34,29 @@ O `/admin` usa uma sessão assinada no Worker. Cadastre `ADMIN_PASSWORD` e
 como Secret. Os segredos da seção **Builds** não ficam disponíveis no runtime.
 Os valores nunca devem ser incluídos no código ou nos logs.
 
-O painel lista os registros da tabela D1 `imoveis` e permite criar um rascunho
-com os dados principais. A criação sempre grava `rascunho`; não publica na
-vitrine. A vitrine estática e o imóvel de referência 11472745 permanecem
-preservados até a etapa de migração. Edição, fotografias e publicação serão
-implementadas nas próximas etapas.
+O painel lista os registros D1 e permite criar e editar os dados completos:
+referência, título, descrição, tipo, finalidade, cidade, bairro, preço, área,
+quartos, banheiros, vagas e URL de origem. A criação sempre grava `rascunho`;
+a edição preserva o status e as fotografias. Upload e mudança de status ficam
+para as próximas etapas. URLs aceitam somente HTTP/HTTPS sem credenciais.
 
-As rotas `GET/POST /api/admin/imoveis` exigem sessão válida. Operações de escrita
+O botão **Integrar imóvel da vitrine** chama `POST /api/admin/migrar-vitrine`
+com sessão e validação de origem. A operação usa uma transação D1 (`batch`)
+para inserir a referência 11472745 e registrar a foto local existente, sem
+duplicações nem sobrescrever cadastros. A foto continua em
+`public/imoveis/msn-11472745-capa.webp`; não depende de R2 nesta etapa.
+O imóvel migrado mantém `publicado`, pois já é um anúncio público.
+A vitrine ainda usa os dados estáticos: editar no painel não atualiza a
+vitrine até a próxima etapa de integração da API pública.
+
+As rotas `GET/POST /api/admin/imoveis` e `GET/PUT /api/admin/imoveis/:id`
+exigem sessão válida. Operações de escrita
 também validam origem e campos no servidor. Nenhuma alteração de esquema é
 necessária para esta etapa.
 
 Validação:
 
 ```bash
-node --test worker/admin.test.mjs
+node --test worker/admin.test.mjs worker/properties.test.mjs
 npm run build
 ```

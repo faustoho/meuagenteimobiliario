@@ -39,7 +39,7 @@ test('create requires same origin, valid input, and always saves a draft', async
   const response = await worker.fetch(post(cookie, { ...sample, status: 'publicado' }), env);
   assert.equal(response.status, 201); assert.deepEqual(await response.json(), { id: 42, status: 'rascunho' });
   const insert = calls.find(call => call.sql.startsWith('INSERT INTO imoveis '));
-  assert.ok(insert.sql.includes("'rascunho'")); assert.deepEqual(insert.values, ['TESTE', 'Casa de teste', 'Casa', 'Venda', 'Curitiba', 500000]);
+  assert.ok(insert.sql.includes("'rascunho'")); assert.deepEqual(insert.values, ['TESTE', 'Casa de teste', null, 'Casa', 'Venda', 'Curitiba', null, 500000, null, null, null, null, null]);
 });
 test('duplicate references return 409 and database failures return 503', async () => {
   const { env } = setup(); const cookie = await login(env);

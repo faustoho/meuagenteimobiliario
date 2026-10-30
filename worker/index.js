@@ -3,6 +3,33 @@ const COOKIE = 'mai_admin';
 const SESSION_SECONDS = 60 * 60 * 8;
 const WINDOW_SECONDS = 15 * 60;
 const MAX_ATTEMPTS = 5;
+const PROPERTY_COLUMNS = 'referencia, titulo, descricao, tipo, finalidade, cidade, bairro, preco, area, quartos, banheiros, vagas, url_origem';
+const PROPERTY_KEYS = PROPERTY_COLUMNS.split(', ');
+function validateProperty(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Dados inválidos.');
+  const result = {};
+  for (const [key, max] of Object.entries({ referencia: 80, titulo: 200, descricao: 10000, cidade: 120, bairro: 120, url_origem: 2048 })) {
+    const value = data[key] ?? '';
+    if (typeof value !== 'string' || value.trim().length > max) throw new Error('Confira o campo ' + key + '.');
+    result[key] = value.trim() || null;
+  }
+  if (!result.titulo || !result.cidade) throw new Error('Informe título e cidade.');
+  if (!['Apartamento', 'Casa', 'Sobrado', 'Terreno', 'Comercial', 'Outro'].includes(data.tipo) || !['Venda', 'Locação'].includes(data.finalidade)) throw new Error('Tipo ou finalidade inválidos.');
+  result.tipo = data.tipo; result.finalidade = data.finalidade;
+  if (typeof data.preco !== 'number' || !Number.isFinite(data.preco) || data.preco <= 0 || data.preco > 1e12) throw new Error('Informe um preço válido.');
+  result.preco = data.preco;
+  for (const key of ['area', 'quartos', 'banheiros', 'vagas']) {
+    const value = data[key] ?? null;
+    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > (key === 'area' ? 1e9 : 1000) || (key !== 'area' && !Number.isInteger(value)))) throw new Error('Confira o campo ' + key + '.');
+    result[key] = value;
+  }
+  if (result.url_origem) {
+    let parsed;
+    try { parsed = new URL(result.url_origem); } catch { throw new Error('URL de origem inválida.'); }
+    if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error('Use uma URL http ou https sem credenciais.');
+  }
+  return PROPERTY_KEYS.map(key => result[key]);
+}
 
 function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...extra } });
@@ -89,37 +116,69 @@ export default {
       if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
       return json({ authenticated: false }, 200, { 'set-cookie': cookie('', 0) });
     }
-    if (route === '/api/admin/imoveis') {
+    if (route === '/api/admin/migrar-vitrine') {
       if (!await authorized(request, env)) return json({ error: 'Sua sessão expirou. Entre novamente.' }, 401);
+      if (request.method !== 'POST') return json({ error: 'Método não permitido.' }, 405, { allow: 'POST' });
+      if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
+      // Fonte fixa e conhecida: nunca busca ou importa URLs enviadas pelo navegador.
+      const referencia = '11472745';
+      const origem = 'https://www.msnimoveis.com.br/imovel/venda/casa-em-florianopolis-sc-11472745';
+      const foto = '/imoveis/msn-11472745-capa.webp';
+      try {
+        const existing = await env.DB.prepare('SELECT id, url_origem FROM imoveis WHERE referencia = ?').bind(referencia).first();
+        if (existing && existing.url_origem !== origem) return json({ error: 'A referência 11472745 já pertence a outro cadastro. Nenhum dado foi alterado.' }, 409);
+        await env.DB.batch([
+          env.DB.prepare(`INSERT INTO imoveis (${PROPERTY_COLUMNS}, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'publicado') ON CONFLICT(referencia) DO NOTHING`).bind(referencia, 'Casa com piscina à venda em Florianópolis', 'Casa à venda em Florianópolis/SC, com 530 m² de área total, 7 dormitórios, 7 banheiros e 2 vagas de garagem. Consulte o anúncio original para mais informações.', 'Casa', 'Venda', 'Florianópolis', 'Bairro não informado', 4500000, 530, 7, 7, 2, origem),
+          env.DB.prepare('INSERT INTO imoveis_fotos (imovel_id, arquivo, legenda, ordem, principal) SELECT id, ?, ?, 0, CASE WHEN EXISTS (SELECT 1 FROM imoveis_fotos WHERE imovel_id = imoveis.id AND principal = 1) THEN 0 ELSE 1 END FROM imoveis WHERE referencia = ? AND url_origem = ? AND NOT EXISTS (SELECT 1 FROM imoveis_fotos WHERE imovel_id = imoveis.id AND arquivo = ?)').bind(foto, 'Casa com piscina em Florianópolis', referencia, origem, foto)
+        ]);
+        const migrated = await env.DB.prepare('SELECT id FROM imoveis WHERE referencia = ?').bind(referencia).first();
+        return json({ id: migrated.id, migrated: true });
+      } catch { return json({ error: 'Não foi possível integrar o imóvel da vitrine.' }, 503); }
+    }
+    const propertyMatch = /^\/api\/admin\/imoveis\/([1-9]\d*)$/.exec(route);
+    if (route === '/api/admin/imoveis' || propertyMatch) {
+      if (!await authorized(request, env)) return json({ error: 'Sua sessão expirou. Entre novamente.' }, 401);
+      const id = propertyMatch ? Number(propertyMatch[1]) : null;
+      if (id !== null && !Number.isSafeInteger(id)) return json({ error: 'Imóvel inválido.' }, 400);
       if (request.method === 'GET') {
         try {
-          const { results } = await env.DB.prepare('SELECT id, referencia, titulo, tipo, finalidade, cidade, bairro, preco, status FROM imoveis ORDER BY criado_em DESC, id DESC').all();
+          const columns = `id, ${PROPERTY_COLUMNS}, status, (SELECT arquivo FROM imoveis_fotos WHERE imovel_id = imoveis.id ORDER BY principal DESC, ordem, id LIMIT 1) AS foto_principal`;
+          if (id !== null) {
+            const imovel = await env.DB.prepare(`SELECT ${columns} FROM imoveis WHERE id = ?`).bind(id).first();
+            return imovel ? json({ imovel }) : json({ error: 'Imóvel não encontrado.' }, 404);
+          }
+          const { results } = await env.DB.prepare(`SELECT ${columns} FROM imoveis ORDER BY criado_em DESC, id DESC`).all();
           return json({ imoveis: results });
         } catch { return json({ error: 'Não foi possível carregar os imóveis.' }, 503); }
       }
-      if (request.method === 'POST') {
+      if ((request.method === 'POST' && id === null) || (request.method === 'PUT' && id !== null)) {
         if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
         if (!request.headers.get('content-type')?.includes('application/json')) return json({ error: 'Formato inválido.' }, 415);
         const body = await request.text();
-        if (body.length > 4096) return json({ error: 'Requisição muito grande.' }, 413);
+        if (encoder.encode(body).length > 65536) return json({ error: 'Requisição muito grande.' }, 413);
         let data;
         try { data = JSON.parse(body); } catch { return json({ error: 'Dados inválidos.' }, 400); }
-        if (!data || typeof data !== 'object' || Array.isArray(data)) return json({ error: 'Dados inválidos.' }, 400);
-        const text = (value, max) => typeof value === 'string' && value.trim().length <= max ? value.trim() : null;
-        const titulo = text(data.titulo, 200);
-        const cidade = text(data.cidade, 120);
-        const referencia = text(data.referencia ?? '', 80);
-        if (!titulo || !cidade || referencia === null || !['Apartamento', 'Casa', 'Sobrado', 'Terreno', 'Comercial', 'Outro'].includes(data.tipo) || !['Venda', 'Locação'].includes(data.finalidade) || typeof data.preco !== 'number' || !Number.isFinite(data.preco) || data.preco <= 0 || data.preco > 1e12) return json({ error: 'Confira os campos obrigatórios e informe um preço válido.' }, 400);
+        let values;
+        try { values = validateProperty(data); } catch (error) { return json({ error: error.message }, 400); }
+        const referencia = values[0];
         try {
-          if (referencia && await env.DB.prepare('SELECT id FROM imoveis WHERE referencia = ?').bind(referencia).first()) return json({ error: 'Esta referência já está cadastrada.' }, 409);
-          const result = await env.DB.prepare("INSERT INTO imoveis (referencia, titulo, tipo, finalidade, cidade, preco, status) VALUES (?, ?, ?, ?, ?, ?, 'rascunho')").bind(referencia || null, titulo, data.tipo, data.finalidade, cidade, data.preco).run();
+          if (id !== null && !await env.DB.prepare('SELECT id FROM imoveis WHERE id = ?').bind(id).first()) return json({ error: 'Imóvel não encontrado.' }, 404);
+          if (referencia) {
+            const duplicate = await env.DB.prepare('SELECT id FROM imoveis WHERE referencia = ?').bind(referencia).first();
+            if (duplicate && duplicate.id !== id) return json({ error: 'Esta referência já está cadastrada.' }, 409);
+          }
+          if (id !== null) {
+            const result = await env.DB.prepare(`UPDATE imoveis SET ${PROPERTY_KEYS.map(key => key + ' = ?').join(', ')}, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?`).bind(...values, id).run();
+            return result.meta.changes ? json({ id, saved: true }) : json({ error: 'Imóvel não encontrado.' }, 404);
+          }
+          const result = await env.DB.prepare(`INSERT INTO imoveis (${PROPERTY_COLUMNS}, status) VALUES (${PROPERTY_KEYS.map(() => '?').join(', ')}, 'rascunho')`).bind(...values).run();
           return json({ id: result.meta.last_row_id, status: 'rascunho' }, 201);
         } catch (error) {
           if (String(error).includes('UNIQUE constraint failed: imoveis.referencia')) return json({ error: 'Esta referência já está cadastrada.' }, 409);
-          return json({ error: 'Não foi possível salvar o rascunho.' }, 503);
+          return json({ error: 'Não foi possível salvar o imóvel.' }, 503);
         }
       }
-      return json({ error: 'Método não permitido.' }, 405, { allow: 'GET, POST' });
+      return json({ error: 'Método não permitido.' }, 405, { allow: id === null ? 'GET, POST' : 'GET, PUT' });
     }
     return json({ error: 'Rota não encontrada.' }, 404);
   }
