@@ -24,6 +24,15 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [purposeFilter, setPurposeFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [cityFilter, setCityFilter] = useState('');
+  const [features, setFeatures] = useState({ precoMin: '', precoMax: '', areaMin: '', areaMax: '', quartos: '', banheiros: '', vagas: '' });
+  function clearFilters() {
+    setFilter(''); setStatusFilter(''); setPurposeFilter(''); setTypeFilter(''); setCityFilter('');
+    setFeatures({ precoMin: '', precoMax: '', areaMin: '', areaMax: '', quartos: '', banheiros: '', vagas: '' });
+  }
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -81,12 +90,24 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
       if (response.status === 401) { onExpired(); return; }
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Não foi possível salvar.');
-      setCreating(false); setEditing(null); setFilter(''); setNotice(editing ? (editing.status === 'publicado' ? 'Alterações salvas e disponíveis na vitrine. O status e a fotografia foram preservados.' : 'Alterações salvas no painel. O imóvel continua fora da vitrine.') : 'Rascunho salvo. O imóvel ainda não está publicado na vitrine.');
+      setCreating(false); setEditing(null); clearFilters(); setNotice(editing ? (editing.status === 'publicado' ? 'Alterações salvas e disponíveis na vitrine. O status e a fotografia foram preservados.' : 'Alterações salvas no painel. O imóvel continua fora da vitrine.') : 'Rascunho salvo. O imóvel ainda não está publicado na vitrine.');
       await load();
     } catch (err) { setError(err instanceof Error ? err.message : 'Falha ao salvar.'); }
     finally { setSaving(false); }
   }
-  const visible = imoveis.filter(item => `${item.titulo} ${item.referencia ?? ''} ${item.cidade}`.toLocaleLowerCase('pt-BR').includes(filter.toLocaleLowerCase('pt-BR')));
+  const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').trim();
+  const cities = [...new Set(imoveis.map(item => item.cidade))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const types = [...new Set(imoveis.map(item => item.tipo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const hasFilters = Boolean(filter || statusFilter || purposeFilter || typeFilter || cityFilter || Object.values(features).some(Boolean));
+  const atLeast = (value: number | null, min: string) => min === '' || (value !== null && value >= Number(min));
+  const atMost = (value: number | null, max: string) => max === '' || (value !== null && value <= Number(max));
+  const invalidRange = (features.precoMin !== '' && features.precoMax !== '' && Number(features.precoMin) > Number(features.precoMax)) || (features.areaMin !== '' && features.areaMax !== '' && Number(features.areaMin) > Number(features.areaMax));
+  const visible = imoveis.filter(item => normalize(`${item.titulo} ${item.referencia ?? ''} ${item.cidade} ${item.bairro ?? ''}`).includes(normalize(filter))
+    && (!statusFilter || item.status === statusFilter) && (!purposeFilter || item.finalidade === purposeFilter)
+    && (!typeFilter || item.tipo === typeFilter) && (!cityFilter || item.cidade === cityFilter)
+    && atLeast(item.preco, features.precoMin) && atMost(item.preco, features.precoMax)
+    && atLeast(item.area, features.areaMin) && atMost(item.area, features.areaMax)
+    && atLeast(item.quartos, features.quartos) && atLeast(item.banheiros, features.banheiros) && atLeast(item.vagas, features.vagas));
   return <section className="mx-auto max-w-6xl px-6 pb-20">
     <div className="flex flex-wrap items-center justify-between gap-4 py-6">
       <div><p className="text-xs font-semibold uppercase tracking-[.22em] text-[#987447]">Painel administrativo</p><h1 className="mt-2 text-3xl font-semibold">Seus imóveis</h1><p className="mt-2 text-slate-600">Gerencie sua carteira de imóveis.</p></div>
@@ -121,9 +142,27 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
       </div><div className="mt-6 flex flex-wrap gap-3"><button disabled={saving} className="rounded-full bg-ink px-6 py-3 font-semibold text-white disabled:opacity-50">{saving ? 'Salvando...' : editing ? 'Salvar alterações' : 'Salvar rascunho'}</button><button type="button" disabled={saving} onClick={() => { setCreating(false); setEditing(null); setError(''); }} className="rounded-full border border-[#d8d2c7] px-6 py-3 font-semibold">Cancelar</button></div>
     </form>}
     <div className="rounded-3xl border border-[#e1dbd1] bg-white p-6 sm:p-8">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><label className="w-full max-w-md text-sm font-semibold">Buscar imóveis<input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Título, referência ou cidade" className={field}/></label><button disabled={loading || saving} onClick={() => void load()} className="inline-flex items-center gap-2 text-sm font-semibold text-[#987447] disabled:opacity-50"><RefreshCw size={16}/> Atualizar lista</button></div>
+      <div className="mb-6">
+        <div className="flex flex-wrap items-end justify-between gap-4"><label className="w-full max-w-lg text-sm font-semibold">Buscar imóveis<input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Título, referência, bairro ou cidade" className={field}/></label><button disabled={loading || saving} onClick={() => void load()} className="inline-flex items-center gap-2 text-sm font-semibold text-[#987447] disabled:opacity-50"><RefreshCw size={16}/> Atualizar lista</button></div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="text-sm font-semibold">Filtrar por status<select value={statusFilter} onChange={event => setStatusFilter(event.target.value)} className={field}><option value="">Todos os status</option>{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-sm font-semibold">Filtrar por finalidade<select value={purposeFilter} onChange={event => setPurposeFilter(event.target.value)} className={field}><option value="">Venda e locação</option><option>Venda</option><option>Locação</option></select></label>
+          <label className="text-sm font-semibold">Filtrar por tipo<select value={typeFilter} onChange={event => setTypeFilter(event.target.value)} className={field}><option value="">Todos os tipos</option>{types.map(value => <option key={value}>{value}</option>)}</select></label>
+          <label className="text-sm font-semibold">Filtrar por cidade<select value={cityFilter} onChange={event => setCityFilter(event.target.value)} className={field}><option value="">Todas as cidades</option>{cities.map(value => <option key={value}>{value}</option>)}</select></label>
+        </div>
+        <details className="mt-5 rounded-xl border border-[#e1dbd1] p-4" open>
+          <summary className="cursor-pointer text-sm font-semibold text-[#987447]">Características e valores</summary>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{([
+            ['precoMin', 'Preço mínimo (R$)', '0.01'], ['precoMax', 'Preço máximo (R$)', '0.01'],
+            ['areaMin', 'Área mínima (m²)', '0.01'], ['areaMax', 'Área máxima (m²)', '0.01'],
+            ['quartos', 'Mínimo de quartos', '1'], ['banheiros', 'Mínimo de banheiros', '1'], ['vagas', 'Mínimo de vagas', '1']
+          ] as const).map(([key, label, step]) => <label key={key} className="text-sm font-semibold">{label}<input type="number" min="0" step={step} value={features[key]} onChange={event => setFeatures(previous => ({ ...previous, [key]: event.target.value }))} placeholder="Sem limite" className={field}/></label>)}</div>
+        </details>
+        {invalidRange && <p role="alert" className="mt-3 text-sm text-amber-800">O valor mínimo deve ser menor ou igual ao máximo nas faixas de preço e área.</p>}
+        <button disabled={!hasFilters} onClick={clearFilters} className="mt-4 rounded-full border border-[#d8d2c7] px-5 py-2 text-sm font-semibold disabled:opacity-40">Limpar filtros</button>
+      </div>
       {loading ? <p role="status" className="flex items-center gap-2 py-10 text-slate-600"><LoaderCircle size={18} className="animate-spin"/> Carregando imóveis...</p> : !imoveis.length ? <div className="py-10 text-center"><Building2 className="mx-auto text-[#987447]" size={36}/><h2 className="mt-4 text-xl font-semibold">Nenhum imóvel cadastrado no painel</h2><p className="mx-auto mt-3 max-w-lg text-slate-600">Clique em Novo imóvel para começar ou integre o imóvel da vitrine pelo botão acima.</p></div> : <>
-        <p className="mb-4 text-sm text-slate-500">{visible.length} de {imoveis.length} imóveis</p>
+        <p role="status" className="mb-4 text-sm text-slate-500">{visible.length} de {imoveis.length} imóveis</p>
         {!visible.length ? <p className="py-8 text-slate-600">Nenhum imóvel corresponde à busca.</p> : <div className="overflow-x-auto"><table className="w-full text-left text-sm">
           <thead><tr className="border-b text-slate-500"><th className="p-3">Imóvel</th><th className="p-3">Localização</th><th className="p-3">Preço</th><th className="p-3">Status</th><th className="p-3">Ações</th></tr></thead>
           <tbody>{visible.map(item => <tr key={item.id} className="border-b last:border-0">

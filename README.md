@@ -46,6 +46,13 @@ com até 30 fotos por imóvel. O envio é sequencial e informa progresso e
 eventuais envios parciais.
 URLs aceitam somente HTTP/HTTPS sem credenciais.
 
+A lista administrativa combina busca por título/referência/bairro/cidade
+(ignorando acentos) com filtros de status, finalidade, tipo, cidade, faixas de
+preço e área e mínimos de quartos, banheiros e vagas. Campos não informados
+não atendem a um filtro numérico ativo. **Limpar filtros** restaura a lista;
+**Atualizar lista** preserva os filtros selecionados. A filtragem é local e
+não altera os dados dos imóveis nem o status de publicação.
+
 O botão **Integrar imóvel da vitrine** chama `POST /api/admin/migrar-vitrine`
 com sessão e validação de origem. A operação usa uma transação D1 (`batch`)
 para inserir a referência 11472745 e registrar a foto local existente, sem
