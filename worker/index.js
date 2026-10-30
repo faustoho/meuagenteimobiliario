@@ -28,7 +28,7 @@ function readCookie(request) {
 }
 async function authorized(request, env) {
   const token = readCookie(request);
-  const match = /^(\\d+)\\.([0-9a-f]{64})$/.exec(token);
+  const match = /^(\d+)\.([0-9a-f]{64})$/.exec(token);
   if (!match || !env.SESSION_SECRET) return false;
   const expires = Number(match[1]);
   if (!Number.isSafeInteger(expires) || expires <= Math.floor(Date.now() / 1000) || expires > Math.floor(Date.now() / 1000) + SESSION_SECONDS) return false;
