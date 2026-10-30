@@ -81,6 +81,18 @@ async function limiter(env, request) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/imoveis') {
+      if (request.method !== 'GET') return json({ error: 'Método não permitido.' }, 405, { allow: 'GET' });
+      try {
+        const { results } = await env.DB.prepare(`SELECT i.id, i.referencia, i.titulo, i.descricao, i.tipo, i.finalidade, i.cidade, i.bairro, i.preco, i.area, i.quartos, i.banheiros, i.vagas, f.arquivo FROM imoveis i LEFT JOIN imoveis_fotos f ON f.imovel_id = i.id WHERE i.status = 'publicado' ORDER BY i.criado_em DESC, i.id DESC, f.principal DESC, f.ordem, f.id`).all();
+        const items = new Map();
+        for (const row of results) {
+          if (!items.has(row.id)) items.set(row.id, { id: String(row.id), referencia: row.referencia || undefined, titulo: row.titulo, descricao: row.descricao || undefined, tipo: row.tipo, finalidade: row.finalidade, cidade: row.cidade, bairro: row.bairro || '', preco: row.preco, area: row.area, quartos: row.quartos, banheiros: row.banheiros, vagas: row.vagas, imagens: [] });
+          if (typeof row.arquivo === 'string' && /^\/imoveis\/[a-z0-9_-]+\.(webp|png|jpe?g|avif)$/i.test(row.arquivo)) items.get(row.id).imagens.push(row.arquivo);
+        }
+        return json({ imoveis: [...items.values()] });
+      } catch { return json({ error: 'Não foi possível carregar os imóveis. Tente novamente.' }, 503); }
+    }
     if (!url.pathname.startsWith('/api/admin/')) return env.ASSETS.fetch(request);
     const missingBindings = ['ADMIN_PASSWORD', 'SESSION_SECRET', 'DB'].filter(name => !env[name]);
     if (missingBindings.length) {
@@ -134,6 +146,24 @@ export default {
         const migrated = await env.DB.prepare('SELECT id FROM imoveis WHERE referencia = ?').bind(referencia).first();
         return json({ id: migrated.id, migrated: true });
       } catch { return json({ error: 'Não foi possível integrar o imóvel da vitrine.' }, 503); }
+    }
+    const statusMatch = /^\/api\/admin\/imoveis\/([1-9]\d*)\/status$/.exec(route);
+    if (statusMatch) {
+      if (!await authorized(request, env)) return json({ error: 'Sua sessão expirou. Entre novamente.' }, 401);
+      if (request.method !== 'PATCH') return json({ error: 'Método não permitido.' }, 405, { allow: 'PATCH' });
+      if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
+      if (!request.headers.get('content-type')?.includes('application/json')) return json({ error: 'Formato inválido.' }, 415);
+      const id = Number(statusMatch[1]);
+      if (!Number.isSafeInteger(id)) return json({ error: 'Imóvel inválido.' }, 400);
+      const body = await request.text();
+      if (encoder.encode(body).length > 1024) return json({ error: 'Requisição muito grande.' }, 413);
+      let data;
+      try { data = JSON.parse(body); } catch { return json({ error: 'Dados inválidos.' }, 400); }
+      if (!data || !['rascunho', 'publicado', 'vendido', 'inativo'].includes(data.status)) return json({ error: 'Status inválido.' }, 400);
+      try {
+        const result = await env.DB.prepare('UPDATE imoveis SET status = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id = ?').bind(data.status, id).run();
+        return result.meta.changes ? json({ id, status: data.status }) : json({ error: 'Imóvel não encontrado.' }, 404);
+      } catch { return json({ error: 'Não foi possível alterar o status.' }, 503); }
     }
     const propertyMatch = /^\/api\/admin\/imoveis\/([1-9]\d*)$/.exec(route);
     if (route === '/api/admin/imoveis' || propertyMatch) {

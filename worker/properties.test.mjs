@@ -26,7 +26,7 @@ function setup(t) {
   async function request(route, method = 'GET', data, requestOrigin = origin) {
     return worker.fetch(new Request(origin + route, { method, headers: { origin: requestOrigin, cookie, 'content-type': 'application/json' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) }), env);
   }
-  return { sqlite, request, async login() {
+  return { sqlite, env, request, async login() {
     const response = await request('/api/admin/login', 'POST', { password: env.ADMIN_PASSWORD });
     assert.equal(response.status, 200); cookie = response.headers.get('set-cookie').split(';')[0];
   } };
@@ -80,4 +80,52 @@ test('migration rejects a conflicting reference without overwriting the existing
   assert.equal((await app.request('/api/admin/migrar-vitrine', 'POST')).status, 409);
   assert.equal(app.sqlite.prepare('SELECT titulo FROM imoveis').get().titulo, sample.titulo);
   assert.equal(app.sqlite.prepare('SELECT COUNT(*) AS count FROM imoveis_fotos').get().count, 0);
+});
+test('public API needs no session or admin secrets and exposes only published properties and their photos', async t => {
+  const app = setup(t); await app.login();
+  const ids = [];
+  for (const status of ['rascunho', 'publicado', 'vendido', 'inativo']) {
+    const id = (await (await app.request(path, 'POST', { ...sample, referencia: status, titulo: status })).json()).id;
+    ids.push(id);
+    if (status !== 'rascunho') assert.equal((await app.request(`${path}/${id}/status`, 'PATCH', { status })).status, 200);
+    app.sqlite.prepare('INSERT INTO imoveis_fotos (imovel_id, arquivo, ordem, principal) VALUES (?, ?, 0, 1)').run(id, `/imoveis/${status}.webp`);
+  }
+  app.sqlite.prepare('INSERT INTO imoveis_fotos (imovel_id, arquivo, ordem, principal) VALUES (?, ?, 2, 0)').run(ids[1], '/imoveis/segunda.webp');
+  app.sqlite.prepare('INSERT INTO imoveis_fotos (imovel_id, arquivo, ordem, principal) VALUES (?, ?, 1, 0)').run(ids[1], 'https://untrusted.example/foto.webp');
+  const response = await worker.fetch(new Request(origin + '/api/imoveis?status=rascunho'), { DB: app.env.DB });
+  assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
+  const data = await response.json(); assert.equal(data.imoveis.length, 1);
+  assert.equal(data.imoveis[0].titulo, 'publicado'); assert.equal(data.imoveis[0].id, String(ids[1]));
+  assert.deepEqual(data.imoveis[0].imagens, ['/imoveis/publicado.webp', '/imoveis/segunda.webp']);
+  assert.ok(!('status' in data.imoveis[0])); assert.ok(!('url_origem' in data.imoveis[0]));
+});
+test('publish, edit, withdraw, sold, draft and republish update the public API immediately', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  const publicItems = async () => (await (await app.request('/api/imoveis')).json()).imoveis;
+  assert.equal((await publicItems()).length, 0);
+  for (const status of ['publicado', 'inativo', 'publicado', 'vendido', 'rascunho', 'publicado']) {
+    assert.equal((await app.request(`${path}/${id}/status`, 'PATCH', { status })).status, 200);
+    assert.equal((await publicItems()).length, status === 'publicado' ? 1 : 0);
+  }
+  assert.equal((await app.request(`${path}/${id}`, 'PUT', { ...sample, titulo: 'Anúncio atualizado', preco: 650000 })).status, 200);
+  const [saved] = await publicItems(); assert.equal(saved.titulo, 'Anúncio atualizado'); assert.equal(saved.preco, 650000); assert.deepEqual(saved.imagens, []);
+});
+test('status changes require session, origin, method and a valid status, leaving existing data intact on error', async t => {
+  const app = setup(t);
+  assert.equal((await app.request(`${path}/1/status`, 'PATCH', { status: 'publicado' })).status, 401);
+  await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  const target = `${path}/${id}/status`;
+  assert.equal((await app.request(target, 'PATCH', { status: 'publicado' }, 'https://other.example')).status, 403);
+  for (const data of [null, {}, { status: 'qualquer' }, { status: 1 }]) assert.equal((await app.request(target, 'PATCH', data)).status, 400);
+  assert.equal((await app.request(target, 'POST', { status: 'publicado' })).status, 405);
+  assert.equal((await app.request(target, 'PATCH', { status: 'publicado', extra: 'x'.repeat(1100) })).status, 413);
+  assert.equal((await app.request(`${path}/999/status`, 'PATCH', { status: 'publicado' })).status, 404);
+  assert.equal(app.sqlite.prepare('SELECT status FROM imoveis WHERE id = ?').get(id).status, 'rascunho');
+});
+test('public API returns an error when D1 fails and never falls back to static listings', async () => {
+  const response = await worker.fetch(new Request(origin + '/api/imoveis'), { DB: { prepare() { throw new Error('private database error'); } } });
+  assert.equal(response.status, 503); assert.ok(!JSON.stringify(await response.json()).includes('private database error'));
+  assert.equal((await worker.fetch(new Request(origin + '/api/imoveis', { method: 'POST' }), {})).status, 405);
 });
