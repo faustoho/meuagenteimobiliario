@@ -14,5 +14,11 @@
       "database_name": "meuagenteimobiliario-db",
       "database_id": "37058c90-83c6-44b7-bd8f-0ea4fe9e9291"
     }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FOTOS",
+      "bucket_name": "meuagenteimobiliario-fotos"
+    }
   ]
 }
