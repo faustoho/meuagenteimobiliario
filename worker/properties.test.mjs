@@ -200,3 +200,24 @@ test('failed D1 registration removes the uploaded object; failed R2 upload does 
   assert.equal((await app.rawRequest(target, 'POST', png)).status, 503);
   assert.equal(app.sqlite.prepare('SELECT COUNT(*) AS total FROM imoveis_fotos').get().total, 0);
 });
+test('individual public property links keep their id across edits and never reveal private or missing properties', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  const endpoint = `/api/imoveis/${id}`;
+  assert.equal((await app.request(endpoint)).status, 404);
+  await app.request(`${path}/${id}/status`, 'PATCH', { status: 'publicado' });
+  let response = await worker.fetch(new Request(origin + endpoint), { DB: app.env.DB });
+  assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
+  let item = (await response.json()).imovel;
+  assert.equal(item.id, String(id)); assert.equal(item.titulo, sample.titulo); assert.equal(item.descricao, sample.descricao);
+  await app.request(`${path}/${id}`, 'PUT', { ...sample, referencia: 'NOVA-REF', titulo: 'Título revisado' });
+  item = (await (await app.request(endpoint)).json()).imovel;
+  assert.equal(item.id, String(id)); assert.equal(item.titulo, 'Título revisado'); assert.equal(item.referencia, 'NOVA-REF');
+  for (const status of ['vendido', 'inativo', 'rascunho']) {
+    await app.request(`${path}/${id}/status`, 'PATCH', { status });
+    response = await app.request(endpoint); assert.equal(response.status, 404); assert.ok(!JSON.stringify(await response.json()).includes('Título revisado'));
+  }
+  assert.equal((await app.request('/api/imoveis/999999')).status, 404);
+  assert.equal((await app.request('/api/imoveis/999999999999999999999999999')).status, 400);
+  assert.equal((await app.request(endpoint, 'POST', {})).status, 405);
+});

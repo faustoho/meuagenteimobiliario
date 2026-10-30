@@ -84,16 +84,21 @@ export default {
     const url = new URL(request.url);
     const publicPhoto = /^\/api\/fotos\/([1-9]\d*)$/.exec(url.pathname);
     if (publicPhoto) return servePhoto(request, env, Number(publicPhoto[1]));
-    if (url.pathname === '/api/imoveis') {
+    const publicProperty = /^\/api\/imoveis\/([1-9]\d*)$/.exec(url.pathname);
+    if (url.pathname === '/api/imoveis' || publicProperty) {
       if (request.method !== 'GET') return json({ error: 'Método não permitido.' }, 405, { allow: 'GET' });
+      const propertyId = publicProperty ? Number(publicProperty[1]) : null;
+      if (propertyId !== null && !Number.isSafeInteger(propertyId)) return json({ error: 'Imóvel inválido.' }, 400);
       try {
-        const { results } = await env.DB.prepare(`SELECT i.id, i.referencia, i.titulo, i.descricao, i.tipo, i.finalidade, i.cidade, i.bairro, i.preco, i.area, i.quartos, i.banheiros, i.vagas, f.id AS foto_id, f.arquivo FROM imoveis i LEFT JOIN imoveis_fotos f ON f.imovel_id = i.id WHERE i.status = 'publicado' ORDER BY i.criado_em DESC, i.id DESC, f.principal DESC, f.ordem, f.id`).all();
+        const statement = env.DB.prepare(`SELECT i.id, i.referencia, i.titulo, i.descricao, i.tipo, i.finalidade, i.cidade, i.bairro, i.preco, i.area, i.quartos, i.banheiros, i.vagas, f.id AS foto_id, f.arquivo FROM imoveis i LEFT JOIN imoveis_fotos f ON f.imovel_id = i.id WHERE i.status = 'publicado'${propertyId === null ? '' : ' AND i.id = ?'} ORDER BY i.criado_em DESC, i.id DESC, f.principal DESC, f.ordem, f.id`);
+        const { results } = await (propertyId === null ? statement : statement.bind(propertyId)).all();
         const items = new Map();
         for (const row of results) {
           if (!items.has(row.id)) items.set(row.id, { id: String(row.id), referencia: row.referencia || undefined, titulo: row.titulo, descricao: row.descricao || undefined, tipo: row.tipo, finalidade: row.finalidade, cidade: row.cidade, bairro: row.bairro || '', preco: row.preco, area: row.area, quartos: row.quartos, banheiros: row.banheiros, vagas: row.vagas, imagens: [] });
           const image = photoUrl({ id: row.foto_id, arquivo: row.arquivo });
           if (image) items.get(row.id).imagens.push(image);
         }
+        if (propertyId !== null) return items.has(propertyId) ? json({ imovel: items.get(propertyId) }) : json({ error: 'Este imóvel não está disponível.' }, 404);
         return json({ imoveis: [...items.values()] });
       } catch { return json({ error: 'Não foi possível carregar os imóveis. Tente novamente.' }, 503); }
     }

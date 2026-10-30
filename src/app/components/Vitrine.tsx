@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Bath, BedDouble, CarFront, MapPin, MessageCircle, Ruler, Search, SlidersHorizontal } from 'lucide-react';
-import type { Imovel } from '../../data/imoveis';
+import type { ImovelPublico } from '../../data/imovel-publico';
 import PhotoGallery from './PhotoGallery';
-
-type ImovelPublico = Omit<Imovel, 'area' | 'quartos' | 'banheiros' | 'vagas'> & { area: number | null; quartos: number | null; banheiros: number | null; vagas: number | null };
+import ShareImovel from './ShareImovel';
 
 const whatsapp = '5541984836669';
 const money = (n: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(n);
@@ -79,6 +78,7 @@ export default function Vitrine() {
         <div className="p-6"><p className="text-xs font-semibold uppercase tracking-wider text-[#987447]">{i.tipo}</p><h3 className="mt-2 text-xl font-semibold">{i.titulo}</h3><p className="mt-2 flex items-center gap-1 text-sm text-slate-500"><MapPin size={15}/>{[i.bairro, i.cidade].filter(Boolean).join(', ')}</p><p className="mt-5 text-2xl font-semibold">{money(i.preco)}{i.finalidade === 'Locação' && <span className="text-sm font-normal text-slate-500">/mês</span>}</p>
         <div className="mt-5 flex flex-wrap gap-4 border-t border-[#eee9e2] pt-4 text-sm text-slate-600">{i.area != null && <span className="inline-flex items-center gap-1"><Ruler size={16}/>{i.area} m²</span>}{i.quartos != null && <span className="inline-flex items-center gap-1"><BedDouble size={16}/>{i.quartos}</span>}{i.banheiros != null && <span className="inline-flex items-center gap-1"><Bath size={16}/>{i.banheiros}</span>}{i.vagas != null && <span className="inline-flex items-center gap-1"><CarFront size={16}/>{i.vagas}</span>}</div>
         <a href={'https://wa.me/' + whatsapp + '?text=' + encodeURIComponent('Olá, Edison! Gostaria de saber mais sobre o imóvel: ' + i.titulo + (i.referencia ? ' (ref. ' + i.referencia + ')' : '') + '.')} target="_blank" rel="noopener noreferrer" className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-ink px-4 py-3 text-sm font-semibold text-white"><MessageCircle size={17}/> Consultar imóvel</a>
+        <ShareImovel id={i.id} titulo={i.titulo} referencia={i.referencia} showDetails/>
         </div></article>)}</div> : <div className="rounded-3xl border border-dashed border-[#cfc6b7] bg-white px-6 py-16 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-sand"><Search size={25} className="text-[#987447]"/></div>
           <h3 className="mt-5 text-2xl font-semibold">{imoveis.length ? 'Nenhum imóvel encontrado' : 'Nossa vitrine está sendo preparada'}</h3>

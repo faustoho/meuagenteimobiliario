@@ -71,6 +71,20 @@ novamente, sem voltar a anúncios estáticos potencialmente desativados.
 Os dados de `src/data/imoveis.ts` permanecem como referência histórica da
 migração e não alimentam mais a vitrine pública.
 
+### Links individuais e compartilhamento
+
+Cada card da vitrine oferece **Ver imóvel**, **Compartilhar no WhatsApp** e
+**Copiar link**. O endereço `/imovel?id=<id D1>` é estável após editar título ou
+referência e funciona com a exportação estática do Next.js. A página consulta
+`GET /api/imoveis/:id`, com a mesma restrição de publicação da vitrine.
+Anúncios vendidos, inativos, rascunhos ou inexistentes não expõem seus dados.
+Falhas temporárias mostram opção de tentar novamente.
+
+O compartilhamento prepara título, referência e URL no WhatsApp, deixando ao
+usuário a escolha do destinatário e o envio. A cópia usa a área de transferência
+do navegador; se indisponível, exibe o endereço para seleção manual.
+O domínio do link é o da página aberta, permitindo a futura mudança de domínio.
+
 As rotas `GET/POST /api/admin/imoveis` e `GET/PUT /api/admin/imoveis/:id`
 exigem sessão válida. Operações de escrita
 também validam origem e campos no servidor. Nenhuma alteração de esquema é
