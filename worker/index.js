@@ -89,6 +89,38 @@ export default {
       if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
       return json({ authenticated: false }, 200, { 'set-cookie': cookie('', 0) });
     }
+    if (route === '/api/admin/imoveis') {
+      if (!await authorized(request, env)) return json({ error: 'Sua sessão expirou. Entre novamente.' }, 401);
+      if (request.method === 'GET') {
+        try {
+          const { results } = await env.DB.prepare('SELECT id, referencia, titulo, tipo, finalidade, cidade, bairro, preco, status FROM imoveis ORDER BY criado_em DESC, id DESC').all();
+          return json({ imoveis: results });
+        } catch { return json({ error: 'Não foi possível carregar os imóveis.' }, 503); }
+      }
+      if (request.method === 'POST') {
+        if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
+        if (!request.headers.get('content-type')?.includes('application/json')) return json({ error: 'Formato inválido.' }, 415);
+        const body = await request.text();
+        if (body.length > 4096) return json({ error: 'Requisição muito grande.' }, 413);
+        let data;
+        try { data = JSON.parse(body); } catch { return json({ error: 'Dados inválidos.' }, 400); }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return json({ error: 'Dados inválidos.' }, 400);
+        const text = (value, max) => typeof value === 'string' && value.trim().length <= max ? value.trim() : null;
+        const titulo = text(data.titulo, 200);
+        const cidade = text(data.cidade, 120);
+        const referencia = text(data.referencia ?? '', 80);
+        if (!titulo || !cidade || referencia === null || !['Apartamento', 'Casa', 'Sobrado', 'Terreno', 'Comercial', 'Outro'].includes(data.tipo) || !['Venda', 'Locação'].includes(data.finalidade) || typeof data.preco !== 'number' || !Number.isFinite(data.preco) || data.preco <= 0 || data.preco > 1e12) return json({ error: 'Confira os campos obrigatórios e informe um preço válido.' }, 400);
+        try {
+          if (referencia && await env.DB.prepare('SELECT id FROM imoveis WHERE referencia = ?').bind(referencia).first()) return json({ error: 'Esta referência já está cadastrada.' }, 409);
+          const result = await env.DB.prepare("INSERT INTO imoveis (referencia, titulo, tipo, finalidade, cidade, preco, status) VALUES (?, ?, ?, ?, ?, ?, 'rascunho')").bind(referencia || null, titulo, data.tipo, data.finalidade, cidade, data.preco).run();
+          return json({ id: result.meta.last_row_id, status: 'rascunho' }, 201);
+        } catch (error) {
+          if (String(error).includes('UNIQUE constraint failed: imoveis.referencia')) return json({ error: 'Esta referência já está cadastrada.' }, 409);
+          return json({ error: 'Não foi possível salvar o rascunho.' }, 503);
+        }
+      }
+      return json({ error: 'Método não permitido.' }, 405, { allow: 'GET, POST' });
+    }
     return json({ error: 'Rota não encontrada.' }, 404);
   }
 };
