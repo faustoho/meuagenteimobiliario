@@ -7,5 +7,12 @@
     "directory": "./out",
     "binding": "ASSETS",
     "not_found_handling": "404-page"
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "meuagenteimobiliario-db",
+      "database_id": "37058c90-83c6-44b7-bd8f-0ea4fe9e9291"
+    }
+  ]
 }
