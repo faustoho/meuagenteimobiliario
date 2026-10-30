@@ -32,7 +32,7 @@ export const imoveis: Imovel[] = [
     quartos: 7,
     banheiros: 7,
     vagas: 2,
-    imagens: [],
+    imagens: ['/imoveis/msn-11472745-capa.webp'],
     descricao: 'Casa à venda em Florianópolis/SC, com 530 m² de área total, 7 dormitórios, 7 banheiros e 2 vagas de garagem. Consulte o anúncio original para mais informações.',
     referencia: '11472745',
     urlOrigem: 'https://www.msnimoveis.com.br/imovel/venda/casa-em-florianopolis-sc-11472745'
