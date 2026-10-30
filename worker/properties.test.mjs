@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { readFile } from 'node:fs/promises';
-const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
-const { default: worker } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+import worker from './index.js';
 const origin = 'https://example.com';
 const path = '/api/admin/imoveis';
 const sample = { referencia: 'TEST-1', titulo: 'Casa de teste', descricao: 'Descrição completa', tipo: 'Casa', finalidade: 'Venda', cidade: 'Curitiba', bairro: 'Centro', preco: 500000, area: 120.5, quartos: 3, banheiros: 2, vagas: 0, url_origem: 'https://example.com/anuncio' };
@@ -21,12 +19,16 @@ function setup(t) {
     try { const results = []; for (const statement of statements) results.push(await statement.run()); sqlite.exec('COMMIT'); return results; }
     catch (error) { sqlite.exec('ROLLBACK'); throw error; }
   } };
-  const env = { DB, ADMIN_PASSWORD: 'test-only-password', SESSION_SECRET: 'test-only-secret' };
+  const objects = new Map();
+  const FOTOS = { async put(key, value) { objects.set(key, new Uint8Array(value)); return { key }; }, async get(key) { const data = objects.get(key); return data ? { body: data, size: data.length } : null; }, async delete(key) { objects.delete(key); } };
+  const env = { DB, FOTOS, ADMIN_PASSWORD: 'test-only-password', SESSION_SECRET: 'test-only-secret' };
   let cookie = '';
   async function request(route, method = 'GET', data, requestOrigin = origin) {
     return worker.fetch(new Request(origin + route, { method, headers: { origin: requestOrigin, cookie, 'content-type': 'application/json' }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) }), env);
   }
-  return { sqlite, env, request, async login() {
+  return { sqlite, env, objects, request, async rawRequest(route, method, body, type = 'image/png', requestOrigin = origin) {
+    return worker.fetch(new Request(origin + route, { method, headers: { cookie, origin: requestOrigin, 'content-type': type }, body }), env);
+  }, async login() {
     const response = await request('/api/admin/login', 'POST', { password: env.ADMIN_PASSWORD });
     assert.equal(response.status, 200); cookie = response.headers.get('set-cookie').split(';')[0];
   } };
@@ -128,4 +130,73 @@ test('public API returns an error when D1 fails and never falls back to static l
   const response = await worker.fetch(new Request(origin + '/api/imoveis'), { DB: { prepare() { throw new Error('private database error'); } } });
   assert.equal(response.status, 503); assert.ok(!JSON.stringify(await response.json()).includes('private database error'));
   assert.equal((await worker.fetch(new Request(origin + '/api/imoveis', { method: 'POST' }), {})).status, 405);
+});
+
+const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jgX8AAAAASUVORK5CYII=', 'base64'));
+test('uploads have unique safe keys, private photo access, primary selection, ordering and public status checks', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  const photosPath = `${path}/${id}/fotos`;
+  const ids = [];
+  for (let i = 0; i < 2; i++) {
+    const response = await app.rawRequest(photosPath, 'POST', png); assert.equal(response.status, 201); ids.push((await response.json()).id);
+  }
+  assert.equal(app.objects.size, 2);
+  for (const key of app.objects.keys()) assert.match(key, new RegExp(`^imoveis/${id}/[a-f0-9-]+\\.png$`));
+  const fotos = (await (await app.request(photosPath)).json()).fotos;
+  assert.equal(fotos[0].principal, true); assert.equal(fotos[1].principal, false); assert.equal(fotos[0].url, `/api/admin/fotos/${ids[0]}`);
+  const privateImage = await app.request(`/api/admin/fotos/${ids[0]}`);
+  assert.equal(privateImage.status, 200); assert.equal(privateImage.headers.get('content-type'), 'image/png'); assert.equal(privateImage.headers.get('x-content-type-options'), 'nosniff');
+  assert.deepEqual(new Uint8Array(await privateImage.arrayBuffer()), png);
+  assert.equal((await app.request(`/api/fotos/${ids[0]}`)).status, 404);
+  assert.equal((await worker.fetch(new Request(origin + `/api/admin/fotos/${ids[0]}`), app.env)).status, 401);
+  assert.equal((await app.request(photosPath, 'PATCH', { ids: [...ids].reverse(), principal: ids[1] })).status, 200);
+  assert.equal((await app.request(`${path}/${id}/status`, 'PATCH', { status: 'publicado' })).status, 200);
+  const images = (await (await app.request('/api/imoveis')).json()).imoveis[0].imagens;
+  assert.deepEqual(images, [`/api/fotos/${ids[1]}`, `/api/fotos/${ids[0]}`]);
+  assert.equal((await worker.fetch(new Request(origin + `/api/fotos/${ids[0]}`), { DB: app.env.DB, FOTOS: app.env.FOTOS })).status, 200);
+  assert.equal((await app.request(`/api/fotos/${ids[0]}`, 'HEAD')).status, 200);
+  await app.request(`${path}/${id}/status`, 'PATCH', { status: 'inativo' });
+  assert.equal((await app.request(`/api/fotos/${ids[0]}`)).status, 404);
+});
+test('uploads reject unauthenticated, cross-origin, oversized and spoofed files and enforce 30 photo limit', async t => {
+  const app = setup(t);
+  assert.equal((await app.rawRequest(`${path}/1/fotos`, 'POST', png)).status, 401);
+  await app.login(); const id = (await (await app.request(path, 'POST', sample)).json()).id; const target = `${path}/${id}/fotos`;
+  assert.equal((await app.rawRequest(target, 'POST', png, 'image/png', 'https://other.example')).status, 403);
+  assert.equal((await app.rawRequest(target, 'POST', png, 'image/svg+xml')).status, 415);
+  assert.equal((await app.rawRequest(target, 'POST', '<html>not a photo</html>')).status, 415);
+  assert.equal((await app.rawRequest(target, 'POST', new Uint8Array(8 * 1024 * 1024 + 1))).status, 413);
+  assert.equal(app.objects.size, 0);
+  for (let i = 0; i < 30; i++) assert.equal((await app.rawRequest(target, 'POST', png)).status, 201);
+  assert.equal((await app.rawRequest(target, 'POST', png)).status, 409); assert.equal(app.objects.size, 30);
+});
+test('ordering rejects missing, duplicated and foreign photo ids; deleting a cover promotes a remaining photo', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id; const target = `${path}/${id}/fotos`;
+  const first = (await (await app.rawRequest(target, 'POST', png)).json()).id;
+  const second = (await (await app.rawRequest(target, 'POST', png)).json()).id;
+  const other = (await (await app.request(path, 'POST', { ...sample, referencia: 'OTHER' })).json()).id;
+  const foreign = (await (await app.rawRequest(`${path}/${other}/fotos`, 'POST', png)).json()).id;
+  for (const data of [{ ids: [first, first], principal: first }, { ids: [], principal: first }, { ids: [first, second], principal: 999 }]) assert.equal((await app.request(target, 'PATCH', data)).status, 400);
+  assert.equal((await app.request(target, 'PATCH', { ids: [first], principal: first })).status, 409);
+  assert.equal((await app.request(target, 'PATCH', { ids: [first, foreign], principal: first })).status, 409);
+  assert.equal((await app.request(`${target}/${foreign}`, 'DELETE')).status, 404);
+  assert.equal((await app.request(`${target}/${first}`, 'DELETE', undefined, 'https://other.example')).status, 403);
+  assert.equal((await app.request(`${target}/${first}`, 'DELETE')).status, 200);
+  assert.equal(app.objects.size, 2); assert.equal((await app.request(`/api/admin/fotos/${first}`)).status, 404);
+  let photos = (await (await app.request(target)).json()).fotos; assert.equal(photos.length, 1); assert.equal(photos[0].principal, true); assert.equal(photos[0].id, second);
+  assert.equal((await app.request(`${target}/${second}`, 'DELETE')).status, 200);
+  photos = (await (await app.request(target)).json()).fotos; assert.equal(photos.length, 0);
+  assert.equal((await app.request(`${path}/${other}/fotos`)).status, 200);
+});
+test('failed D1 registration removes the uploaded object; failed R2 upload does not register a photo', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id; const target = `${path}/${id}/fotos`;
+  const prepare = app.env.DB.prepare;
+  app.env.DB.prepare = sql => { if (sql.startsWith('INSERT INTO imoveis_fotos')) throw new Error('D1 failed'); return prepare(sql); };
+  assert.equal((await app.rawRequest(target, 'POST', png)).status, 503); assert.equal(app.objects.size, 0);
+  app.env.DB.prepare = prepare; app.env.FOTOS.put = async () => { throw new Error('R2 failed'); };
+  assert.equal((await app.rawRequest(target, 'POST', png)).status, 503);
+  assert.equal(app.sqlite.prepare('SELECT COUNT(*) AS total FROM imoveis_fotos').get().total, 0);
 });

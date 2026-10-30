@@ -39,7 +39,11 @@ referência, título, descrição, tipo, finalidade, cidade, bairro, preço, ár
 quartos, banheiros, vagas e URL de origem. A criação sempre grava `rascunho`;
 a edição preserva o status e as fotografias. O seletor de status exige
 **Aplicar status** e confirmação para publicar, desativar, marcar como vendido
-ou voltar a rascunho. Upload de fotografias fica para a próxima etapa.
+ou voltar a rascunho. O botão **Fotos** permite upload múltiplo, escolha de capa,
+ordenação por setas e exclusão com confirmação. Salve capa/ordem antes de
+fechar o gerenciamento. São aceitos JPG, PNG e WebP de até 8 MiB por arquivo,
+com até 30 fotos por imóvel. O envio é sequencial e informa progresso e
+eventuais envios parciais.
 URLs aceitam somente HTTP/HTTPS sem credenciais.
 
 O botão **Integrar imóvel da vitrine** chama `POST /api/admin/migrar-vitrine`
@@ -50,8 +54,10 @@ duplicações nem sobrescrever cadastros. A foto continua em
 O imóvel migrado mantém `publicado`, pois já é um anúncio público.
 A vitrine consome `GET /api/imoveis`, sem login, com dados do D1 e apenas
 registros com status `publicado`. Rascunhos, vendidos e inativos não são
-retornados. As fotos seguem a ordem de principal, ordem e id. Nesta fase,
-são servidas apenas fotos locais validadas em `/imoveis/`.
+retornados. As fotos seguem a ordem de principal, ordem e id. A vitrine abre
+uma galeria com miniaturas, navegação por setas/botões e fechamento por Esc.
+Fotos locais legadas em `/imoveis/` continuam disponíveis e preservadas.
+Novos arquivos usam chaves aleatórias no bucket R2 `FOTOS`.
 As respostas usam `Cache-Control: no-store`. A vitrine consulta novamente
 ao abrir, atualizar ou voltar à aba. Uma falha da API exibe opção de tentar
 novamente, sem voltar a anúncios estáticos potencialmente desativados.
@@ -65,6 +71,24 @@ necessária para esta etapa.
 `PATCH /api/admin/imoveis/:id/status` altera exclusivamente o status, com a
 mesma proteção de sessão e origem. A criação e a edição de dados continuam
 ignorando campos de status enviados fora dessa rota.
+
+### API de fotos
+
+- `GET/POST/PATCH /api/admin/imoveis/:id/fotos`: lista, envio binário de uma foto
+  por requisição e gravação atômica da ordem/capa (`{ ids: number[], principal: number }`).
+- `DELETE /api/admin/imoveis/:id/fotos/:fotoId`: exclui apenas uma foto daquele
+  imóvel, escolhendo outra capa quando necessário.
+- `GET/HEAD /api/admin/fotos/:fotoId`: imagem R2 com sessão administrativa.
+- `GET/HEAD /api/fotos/:fotoId`: imagem R2 somente enquanto o imóvel está publicado.
+
+As escritas validam sessão, origem e propriedade da foto no servidor. Uploads
+têm limite de leitura e validação de MIME/assinatura, sem usar nomes fornecidos
+pelo cliente como chaves. Se o registro D1 falhar, o upload R2 é removido.
+A exclusão remove o registro D1 antes do objeto; falha posterior no R2 retorna
+`cleanupPending` e registra um aviso para limpeza manual de objetos órfãos.
+O objeto sem registro não fica acessível pelas rotas de imagens. A foto local
+legada é removida somente do cadastro, nunca dos assets do repositório.
+O bucket permanece privado, sem credenciais ou acesso direto no navegador.
 
 Validação:
 

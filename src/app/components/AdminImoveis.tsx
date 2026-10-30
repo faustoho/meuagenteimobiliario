@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { Building2, LoaderCircle, LogOut, Plus, RefreshCw, Pencil, Download } from 'lucide-react';
+import { Building2, LoaderCircle, LogOut, Plus, RefreshCw, Pencil, Download, Images } from 'lucide-react';
+import AdminFotos from './AdminFotos';
 
 type Imovel = { id: number; referencia: string | null; titulo: string; descricao: string | null; tipo: string; finalidade: string; cidade: string; bairro: string | null; preco: number; area: number | null; quartos: number | null; banheiros: number | null; vagas: number | null; url_origem: string | null; status: string; foto_principal: string | null };
 const statuses: Record<string, string> = { rascunho: 'Rascunho', publicado: 'Publicado', vendido: 'Vendido', inativo: 'Inativo' };
@@ -17,6 +18,7 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
   const [editing, setEditing] = useState<Imovel | null>(null);
   const [migrating, setMigrating] = useState(false);
   const [statusDrafts, setStatusDrafts] = useState<Record<number, string>>({});
+  const [photoProperty, setPhotoProperty] = useState<Imovel | null>(null);
   const [statusChange, setStatusChange] = useState<{ id: number; titulo: string; status: string } | null>(null);
   const statusDialog = useRef<HTMLDialogElement>(null);
   const [error, setError] = useState('');
@@ -88,10 +90,11 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
   return <section className="mx-auto max-w-6xl px-6 pb-20">
     <div className="flex flex-wrap items-center justify-between gap-4 py-6">
       <div><p className="text-xs font-semibold uppercase tracking-[.22em] text-[#987447]">Painel administrativo</p><h1 className="mt-2 text-3xl font-semibold">Seus imóveis</h1><p className="mt-2 text-slate-600">Gerencie sua carteira de imóveis.</p></div>
-      <div className="flex flex-wrap gap-3"><button disabled={loading || saving || migrating || creating} onClick={() => { setEditing(null); setCreating(true); setError(''); setNotice(''); }} className="inline-flex items-center gap-2 rounded-full bg-ink px-5 py-3 font-semibold text-white disabled:opacity-50"><Plus size={18}/> Novo imóvel</button><button disabled={leaving || saving || migrating} onClick={async () => { setLeaving(true); try { await onLogout(); } finally { setLeaving(false); } }} className="inline-flex items-center gap-2 rounded-full border border-[#d8d2c7] px-5 py-3 font-semibold disabled:opacity-50"><LogOut size={18}/>{leaving ? 'Saindo...' : 'Sair'}</button></div>
+      <div className="flex flex-wrap gap-3"><button disabled={loading || saving || migrating || creating || !!photoProperty} onClick={() => { setEditing(null); setCreating(true); setError(''); setNotice(''); }} className="inline-flex items-center gap-2 rounded-full bg-ink px-5 py-3 font-semibold text-white disabled:opacity-50"><Plus size={18}/> Novo imóvel</button><button disabled={leaving || saving || migrating || !!photoProperty} onClick={async () => { setLeaving(true); try { await onLogout(); } finally { setLeaving(false); } }} className="inline-flex items-center gap-2 rounded-full border border-[#d8d2c7] px-5 py-3 font-semibold disabled:opacity-50"><LogOut size={18}/>{leaving ? 'Saindo...' : 'Sair'}</button></div>
     </div>
     {notice && <p role="status" className="mb-5 rounded-xl bg-emerald-50 p-4 text-emerald-800">{notice}</p>}
     {error && <p role="alert" className="mb-5 rounded-xl bg-red-50 p-4 text-red-700">{error}</p>}
+    {photoProperty && <AdminFotos key={photoProperty.id} id={photoProperty.id} titulo={photoProperty.titulo} onExpired={onExpired} onChanged={load} onClose={() => setPhotoProperty(null)}/>}
     <p className="mb-5 text-sm leading-6 text-slate-600">Somente imóveis com status Publicado aparecem na vitrine. Alterações nos anúncios publicados são exibidas ao abrir ou atualizar a vitrine.</p>
     {statusChange && <dialog ref={statusDialog} onCancel={event => { event.preventDefault(); if (!saving) setStatusChange(null); }} aria-labelledby="status-title" aria-describedby="status-description" className="fixed inset-0 m-auto w-[calc(100%_-_3rem)] max-w-md rounded-3xl bg-white p-7 text-ink shadow-xl backdrop:bg-black/40">
       <h2 id="status-title" className="text-xl font-semibold">{statusChange.status === 'publicado' ? 'Publicar imóvel?' : 'Alterar status do imóvel?'}</h2>
@@ -102,7 +105,7 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
     {!loading && !error && !imoveis.some(item => item.referencia === '11472745') && <div className="mb-6 rounded-2xl border border-[#e1dbd1] bg-white p-5"><p className="text-sm text-slate-600">Traga para o painel a casa de Florianópolis já exibida na vitrine, com sua fotografia.</p><button disabled={migrating || saving || creating} onClick={() => void migrate()} className="mt-3 inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Download size={18}/>{migrating ? 'Integrando...' : 'Integrar imóvel da vitrine'}</button></div>}
     {creating && <form key={editing?.id ?? 'novo'} onSubmit={save} aria-label={editing ? 'Editar imóvel' : 'Novo imóvel'} className="mb-8 rounded-3xl border border-[#e1dbd1] bg-white p-6 sm:p-8">
       <h2 className="text-xl font-semibold">{editing ? 'Editar imóvel' : 'Novo imóvel'}</h2><p className="mt-2 text-sm text-slate-600">{editing ? `Status atual: ${statuses[editing.status] || editing.status}. Salvar mantém esse status.` : 'Preencha os dados do imóvel. Ele será salvo como rascunho.'}</p>
-      {editing?.foto_principal?.startsWith('/imoveis/') && <img src={editing.foto_principal} alt={`Fotografia de ${editing.titulo}`} className="mt-5 h-44 w-full max-w-sm rounded-xl object-cover"/>}
+      {editing?.foto_principal && <img src={editing.foto_principal} alt={`Fotografia de ${editing.titulo}`} className="mt-5 h-44 w-full max-w-sm rounded-xl object-cover"/>}
       <div className="mt-6 grid gap-5 sm:grid-cols-2">
         <label className="text-sm font-semibold sm:col-span-2">Título *<input name="titulo" defaultValue={editing?.titulo ?? ''} required maxLength={200} className={field}/></label>
         <label className="text-sm font-semibold sm:col-span-2">Descrição<textarea name="descricao" defaultValue={editing?.descricao ?? ''} rows={5} maxLength={10000} className={field}/></label>
@@ -124,14 +127,14 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
         {!visible.length ? <p className="py-8 text-slate-600">Nenhum imóvel corresponde à busca.</p> : <div className="overflow-x-auto"><table className="w-full text-left text-sm">
           <thead><tr className="border-b text-slate-500"><th className="p-3">Imóvel</th><th className="p-3">Localização</th><th className="p-3">Preço</th><th className="p-3">Status</th><th className="p-3">Ações</th></tr></thead>
           <tbody>{visible.map(item => <tr key={item.id} className="border-b last:border-0">
-            <td className="p-3">{item.foto_principal?.startsWith('/imoveis/') && <img src={item.foto_principal} alt="" className="mb-2 h-20 w-32 rounded-lg object-cover"/>}<p className="font-semibold">{item.titulo}</p><p className="mt-1 text-slate-500">{item.tipo} · {item.finalidade} · Ref. {item.referencia || item.id}</p></td>
+            <td className="p-3">{item.foto_principal && <img src={item.foto_principal} alt="" className="mb-2 h-20 w-32 rounded-lg object-cover"/>}<p className="font-semibold">{item.titulo}</p><p className="mt-1 text-slate-500">{item.tipo} · {item.finalidade} · Ref. {item.referencia || item.id}</p></td>
             <td className="p-3">{item.cidade}{item.bairro ? ` · ${item.bairro}` : ''}</td>
             <td className="whitespace-nowrap p-3">{currency.format(item.preco)}</td>
             <td className="p-3"><span className={`rounded-full px-3 py-1 text-xs font-semibold ${item.status === 'publicado' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>{statuses[item.status] || item.status}</span>
-              <select aria-label={`Status de ${item.titulo}`} disabled={saving || creating || migrating || loading} value={statusDrafts[item.id] ?? item.status} onChange={event => setStatusDrafts(previous => ({ ...previous, [item.id]: event.target.value }))} className="mt-3 w-full min-w-32 rounded-lg border border-[#d8d2c7] bg-white px-2 py-2 text-sm">{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-              <button disabled={saving || creating || migrating || loading || !statusDrafts[item.id] || statusDrafts[item.id] === item.status} onClick={() => { setError(''); setStatusChange({ id: item.id, titulo: item.titulo, status: statusDrafts[item.id] }); }} aria-label={`Aplicar status de ${item.titulo}`} className="mt-2 text-sm font-semibold text-[#987447] disabled:opacity-40">Aplicar status</button>
+              <select aria-label={`Status de ${item.titulo}`} disabled={saving || creating || migrating || loading || !!photoProperty} value={statusDrafts[item.id] ?? item.status} onChange={event => setStatusDrafts(previous => ({ ...previous, [item.id]: event.target.value }))} className="mt-3 w-full min-w-32 rounded-lg border border-[#d8d2c7] bg-white px-2 py-2 text-sm">{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+              <button disabled={saving || creating || migrating || loading || !!photoProperty || !statusDrafts[item.id] || statusDrafts[item.id] === item.status} onClick={() => { setError(''); setStatusChange({ id: item.id, titulo: item.titulo, status: statusDrafts[item.id] }); }} aria-label={`Aplicar status de ${item.titulo}`} className="mt-2 text-sm font-semibold text-[#987447] disabled:opacity-40">Aplicar status</button>
             </td>
-            <td className="p-3"><button disabled={saving || creating || migrating} onClick={() => { setEditing(item); setCreating(true); setError(''); setNotice(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }} aria-label={`Editar ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Pencil size={16}/> Editar</button></td>
+            <td className="p-3"><div className="flex flex-col items-start gap-4"><button disabled={saving || creating || migrating || !!photoProperty} onClick={() => { setEditing(item); setCreating(true); setError(''); setNotice(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }} aria-label={`Editar ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Pencil size={16}/> Editar</button><button disabled={saving || creating || migrating || !!photoProperty} onClick={() => { setPhotoProperty(item); setError(''); setNotice(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }} aria-label={`Fotos de ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Images size={16}/> Fotos</button></div></td>
           </tr>)}</tbody>
         </table></div>}
       </>}

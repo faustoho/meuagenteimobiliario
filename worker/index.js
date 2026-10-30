@@ -1,3 +1,4 @@
+import { photoUrl, servePhoto, managePhotos } from './photos.js';
 const encoder = new TextEncoder();
 const COOKIE = 'mai_admin';
 const SESSION_SECONDS = 60 * 60 * 8;
@@ -81,14 +82,17 @@ async function limiter(env, request) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const publicPhoto = /^\/api\/fotos\/([1-9]\d*)$/.exec(url.pathname);
+    if (publicPhoto) return servePhoto(request, env, Number(publicPhoto[1]));
     if (url.pathname === '/api/imoveis') {
       if (request.method !== 'GET') return json({ error: 'Método não permitido.' }, 405, { allow: 'GET' });
       try {
-        const { results } = await env.DB.prepare(`SELECT i.id, i.referencia, i.titulo, i.descricao, i.tipo, i.finalidade, i.cidade, i.bairro, i.preco, i.area, i.quartos, i.banheiros, i.vagas, f.arquivo FROM imoveis i LEFT JOIN imoveis_fotos f ON f.imovel_id = i.id WHERE i.status = 'publicado' ORDER BY i.criado_em DESC, i.id DESC, f.principal DESC, f.ordem, f.id`).all();
+        const { results } = await env.DB.prepare(`SELECT i.id, i.referencia, i.titulo, i.descricao, i.tipo, i.finalidade, i.cidade, i.bairro, i.preco, i.area, i.quartos, i.banheiros, i.vagas, f.id AS foto_id, f.arquivo FROM imoveis i LEFT JOIN imoveis_fotos f ON f.imovel_id = i.id WHERE i.status = 'publicado' ORDER BY i.criado_em DESC, i.id DESC, f.principal DESC, f.ordem, f.id`).all();
         const items = new Map();
         for (const row of results) {
           if (!items.has(row.id)) items.set(row.id, { id: String(row.id), referencia: row.referencia || undefined, titulo: row.titulo, descricao: row.descricao || undefined, tipo: row.tipo, finalidade: row.finalidade, cidade: row.cidade, bairro: row.bairro || '', preco: row.preco, area: row.area, quartos: row.quartos, banheiros: row.banheiros, vagas: row.vagas, imagens: [] });
-          if (typeof row.arquivo === 'string' && /^\/imoveis\/[a-z0-9_-]+\.(webp|png|jpe?g|avif)$/i.test(row.arquivo)) items.get(row.id).imagens.push(row.arquivo);
+          const image = photoUrl({ id: row.foto_id, arquivo: row.arquivo });
+          if (image) items.get(row.id).imagens.push(image);
         }
         return json({ imoveis: [...items.values()] });
       } catch { return json({ error: 'Não foi possível carregar os imóveis. Tente novamente.' }, 503); }
@@ -101,6 +105,14 @@ export default {
       return json({ error: 'Configuração administrativa incompleta.' }, 503);
     }
     const route = url.pathname;
+    const adminPhoto = /^\/api\/admin\/fotos\/([1-9]\d*)$/.exec(route);
+    const photoManagement = /^\/api\/admin\/imoveis\/([1-9]\d*)\/fotos(?:\/([1-9]\d*))?$/.exec(route);
+    if (adminPhoto || photoManagement) {
+      if (!await authorized(request, env)) return json({ error: 'Sua sessão expirou. Entre novamente.' }, 401);
+      const ids = (adminPhoto || photoManagement).slice(1).filter(Boolean).map(Number);
+      if (ids.some(id => !Number.isSafeInteger(id))) return json({ error: 'Identificador inválido.' }, 400);
+      return adminPhoto ? servePhoto(request, env, ids[0], true) : managePhotos(request, env, ids[0], ids[1] ?? null);
+    }
     if (route === '/api/admin/session' && request.method === 'GET') return json({ authenticated: await authorized(request, env) });
     if (route === '/api/admin/login' && request.method === 'POST') {
       if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
@@ -172,7 +184,7 @@ export default {
       if (id !== null && !Number.isSafeInteger(id)) return json({ error: 'Imóvel inválido.' }, 400);
       if (request.method === 'GET') {
         try {
-          const columns = `id, ${PROPERTY_COLUMNS}, status, (SELECT arquivo FROM imoveis_fotos WHERE imovel_id = imoveis.id ORDER BY principal DESC, ordem, id LIMIT 1) AS foto_principal`;
+          const columns = `id, ${PROPERTY_COLUMNS}, status, (SELECT CASE WHEN arquivo LIKE 'imoveis/%' THEN '/api/admin/fotos/' || id ELSE arquivo END FROM imoveis_fotos WHERE imovel_id = imoveis.id ORDER BY principal DESC, ordem, id LIMIT 1) AS foto_principal`;
           if (id !== null) {
             const imovel = await env.DB.prepare(`SELECT ${columns} FROM imoveis WHERE id = ?`).bind(id).first();
             return imovel ? json({ imovel }) : json({ error: 'Imóvel não encontrado.' }, 404);

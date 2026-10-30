@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
-const { default: worker } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+import worker from './index.js';
 const origin = 'https://example.com';
 const sample = { titulo: 'Casa de teste', cidade: 'Curitiba', tipo: 'Casa', finalidade: 'Venda', preco: 500000, referencia: 'TESTE' };
 function setup() {
