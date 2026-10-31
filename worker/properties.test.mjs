@@ -13,14 +13,14 @@ function setup(t) {
     CREATE TABLE imoveis_fotos (id INTEGER PRIMARY KEY AUTOINCREMENT, imovel_id INTEGER NOT NULL REFERENCES imoveis(id) ON DELETE CASCADE, arquivo TEXT NOT NULL, legenda TEXT, ordem INTEGER NOT NULL DEFAULT 0, principal INTEGER NOT NULL DEFAULT 0 CHECK(principal IN (0,1)), criado_em TEXT DEFAULT CURRENT_TIMESTAMP);`);
   const DB = { prepare(sql) {
     let values = [];
-    return { bind(...args) { values = args; return this; }, async first() { return sqlite.prepare(sql).get(...values) ?? null; }, async all() { return { results: sqlite.prepare(sql).all(...values) }; }, async run() { const result = sqlite.prepare(sql).run(...values); return { meta: { last_row_id: Number(result.lastInsertRowid), changes: Number(result.changes) } }; } };
+    return { bind(...args) { values = args; return this; }, async first() { return sqlite.prepare(sql).get(...values) ?? null; }, async all() { return { results: sqlite.prepare(sql).all(...values) }; }, async run() { if (sql.startsWith('SELECT ')) return { results: sqlite.prepare(sql).all(...values), meta: {} }; const result = sqlite.prepare(sql).run(...values); return { meta: { last_row_id: Number(result.lastInsertRowid), changes: Number(result.changes) } }; } };
   }, async batch(statements) {
     sqlite.exec('BEGIN');
     try { const results = []; for (const statement of statements) results.push(await statement.run()); sqlite.exec('COMMIT'); return results; }
     catch (error) { sqlite.exec('ROLLBACK'); throw error; }
   } };
   const objects = new Map();
-  const FOTOS = { async put(key, value) { objects.set(key, new Uint8Array(value)); return { key }; }, async get(key) { const data = objects.get(key); return data ? { body: data, size: data.length } : null; }, async delete(key) { objects.delete(key); } };
+  const FOTOS = { async put(key, value) { objects.set(key, new Uint8Array(value)); return { key }; }, async get(key) { const data = objects.get(key); return data ? { body: data, size: data.length } : null; }, async delete(key) { for (const item of Array.isArray(key) ? key : [key]) objects.delete(item); } };
   const env = { DB, FOTOS, ADMIN_PASSWORD: 'test-only-password', SESSION_SECRET: 'test-only-secret' };
   let cookie = '';
   async function request(route, method = 'GET', data, requestOrigin = origin) {
@@ -220,4 +220,53 @@ test('individual public property links keep their id across edits and never reve
   assert.equal((await app.request('/api/imoveis/999999')).status, 404);
   assert.equal((await app.request('/api/imoveis/999999999999999999999999999')).status, 400);
   assert.equal((await app.request(endpoint, 'POST', {})).status, 405);
+});
+test('property deletion requires session, same origin and explicit matching confirmation', async t => {
+  const app = setup(t);
+  assert.equal((await app.request(`${path}/1`, 'DELETE', { confirmacao: 1 })).status, 401);
+  await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  const target = `${path}/${id}`;
+  assert.equal((await app.request(target, 'DELETE', { confirmacao: id }, 'https://other.example')).status, 403);
+  for (const body of [null, {}, { confirmacao: '1' }, { confirmacao: id + 1 }]) assert.equal((await app.request(target, 'DELETE', body)).status, 400);
+  assert.equal((await app.request(target, 'DELETE', { confirmacao: id, extra: 'x'.repeat(1100) })).status, 413);
+  assert.equal((await app.rawRequest(target, 'DELETE', '{}', 'text/plain')).status, 415);
+  assert.equal((await app.request(target)).status, 200);
+});
+test('property deletion removes its photos and public link while preserving other properties and legacy assets', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  const other = (await (await app.request(path, 'POST', { ...sample, referencia: 'OTHER' })).json()).id;
+  await app.rawRequest(`${path}/${id}/fotos`, 'POST', png);
+  await app.rawRequest(`${path}/${other}/fotos`, 'POST', png);
+  app.sqlite.prepare('INSERT INTO imoveis_fotos (imovel_id, arquivo) VALUES (?, ?)').run(id, '/imoveis/msn-11472745-capa.webp');
+  await app.request(`${path}/${id}/status`, 'PATCH', { status: 'publicado' });
+  assert.equal((await app.request(`/api/imoveis/${id}`)).status, 200);
+  const response = await app.request(`${path}/${id}`, 'DELETE', { confirmacao: id });
+  assert.equal(response.status, 200); assert.deepEqual(await response.json(), { deleted: true, cleanupPending: false });
+  assert.equal((await app.request(`${path}/${id}`)).status, 404); assert.equal((await app.request(`/api/imoveis/${id}`)).status, 404);
+  assert.equal(app.sqlite.prepare('SELECT COUNT(*) AS count FROM imoveis_fotos WHERE imovel_id = ?').get(id).count, 0);
+  assert.equal((await app.request(`${path}/${other}`)).status, 200); assert.equal(app.objects.size, 1);
+  assert.equal((await app.request(`${path}/${id}`, 'DELETE', { confirmacao: id })).status, 404);
+});
+test('a failed delete transaction restores property and photos and never touches storage', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  await app.rawRequest(`${path}/${id}/fotos`, 'POST', png);
+  app.sqlite.exec("CREATE TRIGGER prevent_test_delete BEFORE DELETE ON imoveis BEGIN SELECT RAISE(ABORT, 'test failure'); END;");
+  assert.equal((await app.request(`${path}/${id}`, 'DELETE', { confirmacao: id })).status, 503);
+  assert.equal((await app.request(`${path}/${id}`)).status, 200);
+  assert.equal(app.sqlite.prepare('SELECT COUNT(*) AS count FROM imoveis_fotos').get().count, 1); assert.equal(app.objects.size, 1);
+});
+test('missing R2 blocks deletion when stored photos exist, and cleanup failures are reported after DB deletion', async t => {
+  const app = setup(t); await app.login();
+  const id = (await (await app.request(path, 'POST', sample)).json()).id;
+  await app.rawRequest(`${path}/${id}/fotos`, 'POST', png);
+  const bucket = app.env.FOTOS; app.env.FOTOS = undefined;
+  assert.equal((await app.request(`${path}/${id}`, 'DELETE', { confirmacao: id })).status, 503);
+  assert.equal((await app.request(`${path}/${id}`)).status, 200);
+  app.env.FOTOS = bucket; app.env.FOTOS.delete = async () => { throw new Error('R2 temporarily unavailable'); };
+  const response = await app.request(`${path}/${id}`, 'DELETE', { confirmacao: id });
+  assert.equal(response.status, 200); assert.equal((await response.json()).cleanupPending, true);
+  assert.equal((await app.request(`${path}/${id}`)).status, 404);
 });

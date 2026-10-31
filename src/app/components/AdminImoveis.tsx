@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { Building2, LoaderCircle, LogOut, Plus, RefreshCw, Pencil, Download, Images } from 'lucide-react';
+import { Building2, LoaderCircle, LogOut, Plus, RefreshCw, Pencil, Download, Images, Trash2 } from 'lucide-react';
 import AdminFotos from './AdminFotos';
 
 type Imovel = { id: number; referencia: string | null; titulo: string; descricao: string | null; tipo: string; finalidade: string; cidade: string; bairro: string | null; preco: number; area: number | null; quartos: number | null; banheiros: number | null; vagas: number | null; url_origem: string | null; status: string; foto_principal: string | null };
@@ -21,6 +21,9 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
   const [photoProperty, setPhotoProperty] = useState<Imovel | null>(null);
   const [statusChange, setStatusChange] = useState<{ id: number; titulo: string; status: string } | null>(null);
   const statusDialog = useRef<HTMLDialogElement>(null);
+  const [deletingProperty, setDeletingProperty] = useState<Imovel | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const deleteDialog = useRef<HTMLDialogElement>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState('');
@@ -47,6 +50,23 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
   }, [onExpired]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (statusChange && statusDialog.current && !statusDialog.current.open) statusDialog.current.showModal(); }, [statusChange]);
+  useEffect(() => { if (deletingProperty && deleteDialog.current && !deleteDialog.current.open) deleteDialog.current.showModal(); }, [deletingProperty]);
+  async function deleteProperty() {
+    if (!deletingProperty || deleteConfirmation !== 'EXCLUIR') return;
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const response = await fetch(`/api/admin/imoveis/${deletingProperty.id}`, {
+        method: 'DELETE', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmacao: deletingProperty.id })
+      });
+      if (response.status === 401) { onExpired(); return; }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Não foi possível excluir o imóvel.');
+      setDeletingProperty(null); setDeleteConfirmation(''); setStatusDrafts({}); clearFilters();
+      setNotice(data.cleanupPending ? 'Imóvel excluído do painel e da vitrine. A limpeza das fotos no armazenamento ficou pendente.' : 'Imóvel e fotos vinculadas excluídos. O link do anúncio não está mais disponível.');
+      await load();
+    } catch (err) { setError(err instanceof Error ? err.message : 'Falha ao excluir o imóvel.'); setDeletingProperty(null); }
+    finally { setSaving(false); }
+  }
   async function changeStatus() {
     if (!statusChange) return;
     setSaving(true); setError(''); setNotice('');
@@ -115,6 +135,13 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
     </div>
     {notice && <p role="status" className="mb-5 rounded-xl bg-emerald-50 p-4 text-emerald-800">{notice}</p>}
     {error && <p role="alert" className="mb-5 rounded-xl bg-red-50 p-4 text-red-700">{error}</p>}
+    {deletingProperty && <dialog ref={deleteDialog} onCancel={event => { event.preventDefault(); if (!saving) setDeletingProperty(null); }} aria-labelledby="delete-property-title" aria-describedby="delete-property-description" className="fixed inset-0 m-auto w-[calc(100%_-_3rem)] max-w-lg rounded-3xl bg-white p-7 text-ink shadow-xl backdrop:bg-black/40">
+      <h2 id="delete-property-title" className="text-xl font-semibold">Excluir imóvel definitivamente?</h2>
+      <p className="mt-4 font-semibold">{deletingProperty.titulo}</p><p className="mt-2 text-sm text-slate-600">Referência: {deletingProperty.referencia || deletingProperty.id} · {deletingProperty.cidade} · {statuses[deletingProperty.status]}</p>
+      <p id="delete-property-description" className="mt-4 leading-7 text-slate-600">O cadastro e as fotos vinculadas serão excluídos. O anúncio sairá da vitrine e seu link ficará indisponível. Esta ação não pode ser desfeita. Para apenas retirar da vitrine, use o status Inativo.</p>
+      <label className="mt-5 block text-sm font-semibold">Digite EXCLUIR para confirmar<input disabled={saving} value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" spellCheck={false} className={field}/></label>
+      <div className="mt-6 flex flex-wrap gap-3"><button autoFocus disabled={saving} onClick={() => setDeletingProperty(null)} className="rounded-full border border-[#d8d2c7] px-5 py-3 font-semibold">Cancelar</button><button disabled={saving || deleteConfirmation !== 'EXCLUIR'} onClick={() => void deleteProperty()} className="rounded-full bg-red-700 px-5 py-3 font-semibold text-white disabled:opacity-40">{saving ? 'Excluindo...' : 'Excluir definitivamente'}</button></div>
+    </dialog>}
     {photoProperty && <AdminFotos key={photoProperty.id} id={photoProperty.id} titulo={photoProperty.titulo} onExpired={onExpired} onChanged={load} onClose={() => setPhotoProperty(null)}/>}
     <p className="mb-5 text-sm leading-6 text-slate-600">Somente imóveis com status Publicado aparecem na vitrine. Alterações nos anúncios publicados são exibidas ao abrir ou atualizar a vitrine.</p>
     {statusChange && <dialog ref={statusDialog} onCancel={event => { event.preventDefault(); if (!saving) setStatusChange(null); }} aria-labelledby="status-title" aria-describedby="status-description" className="fixed inset-0 m-auto w-[calc(100%_-_3rem)] max-w-md rounded-3xl bg-white p-7 text-ink shadow-xl backdrop:bg-black/40">
@@ -173,7 +200,7 @@ export default function AdminImoveis({ onLogout, onExpired }: { onLogout: () => 
               <select aria-label={`Status de ${item.titulo}`} disabled={saving || creating || migrating || loading || !!photoProperty} value={statusDrafts[item.id] ?? item.status} onChange={event => setStatusDrafts(previous => ({ ...previous, [item.id]: event.target.value }))} className="mt-3 w-full min-w-32 rounded-lg border border-[#d8d2c7] bg-white px-2 py-2 text-sm">{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
               <button disabled={saving || creating || migrating || loading || !!photoProperty || !statusDrafts[item.id] || statusDrafts[item.id] === item.status} onClick={() => { setError(''); setStatusChange({ id: item.id, titulo: item.titulo, status: statusDrafts[item.id] }); }} aria-label={`Aplicar status de ${item.titulo}`} className="mt-2 text-sm font-semibold text-[#987447] disabled:opacity-40">Aplicar status</button>
             </td>
-            <td className="p-3"><div className="flex flex-col items-start gap-4"><button disabled={saving || creating || migrating || !!photoProperty} onClick={() => { setEditing(item); setCreating(true); setError(''); setNotice(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }} aria-label={`Editar ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Pencil size={16}/> Editar</button><button disabled={saving || creating || migrating || !!photoProperty} onClick={() => { setPhotoProperty(item); setError(''); setNotice(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }} aria-label={`Fotos de ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Images size={16}/> Fotos</button></div></td>
+            <td className="p-3"><div className="flex flex-col items-start gap-4"><button disabled={saving || creating || migrating || !!photoProperty} onClick={() => { setEditing(item); setCreating(true); setError(''); setNotice(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }} aria-label={`Editar ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Pencil size={16}/> Editar</button><button disabled={saving || creating || migrating || !!photoProperty} onClick={() => { setPhotoProperty(item); setError(''); setNotice(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }} aria-label={`Fotos de ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-[#987447] disabled:opacity-50"><Images size={16}/> Fotos</button><button disabled={saving || creating || migrating || loading || !!photoProperty} onClick={() => { setDeleteConfirmation(''); setDeletingProperty(item); setError(''); }} aria-label={`Excluir ${item.titulo}`} className="inline-flex items-center gap-2 font-semibold text-red-700 disabled:opacity-50"><Trash2 size={16}/> Excluir</button></div></td>
           </tr>)}</tbody>
         </table></div>}
       </>}

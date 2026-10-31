@@ -53,6 +53,16 @@ não atendem a um filtro numérico ativo. **Limpar filtros** restaura a lista;
 **Atualizar lista** preserva os filtros selecionados. A filtragem é local e
 não altera os dados dos imóveis nem o status de publicação.
 
+O botão **Excluir** abre uma confirmação com título, referência, cidade e status.
+É necessário digitar `EXCLUIR`. A ação é definitiva; para apenas ocultar um
+anúncio, use **Inativo**. `DELETE /api/admin/imoveis/:id` exige sessão, origem,
+JSON e `{ confirmacao: <id numérico> }`. A seleção das chaves e as exclusões
+de fotos/cadastro são feitas em uma transação D1. Só depois são removidos os
+objetos R2 daquele imóvel. Falhas de limpeza são sinalizadas (`cleanupPending`);
+os arquivos sem registro ficam inacessíveis pelas rotas de imagens.
+Assets locais legados são preservados no repositório. O link público do
+cadastro excluído passa a mostrar imóvel indisponível.
+
 O botão **Integrar imóvel da vitrine** chama `POST /api/admin/migrar-vitrine`
 com sessão e validação de origem. A operação usa uma transação D1 (`batch`)
 para inserir a referência 11472745 e registrar a foto local existente, sem

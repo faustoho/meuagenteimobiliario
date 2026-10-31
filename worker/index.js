@@ -187,6 +187,30 @@ export default {
       if (!await authorized(request, env)) return json({ error: 'Sua sessão expirou. Entre novamente.' }, 401);
       const id = propertyMatch ? Number(propertyMatch[1]) : null;
       if (id !== null && !Number.isSafeInteger(id)) return json({ error: 'Imóvel inválido.' }, 400);
+      if (request.method === 'DELETE' && id !== null) {
+        if (request.headers.get('origin') !== url.origin) return json({ error: 'Origem inválida.' }, 403);
+        if (!request.headers.get('content-type')?.includes('application/json')) return json({ error: 'Formato inválido.' }, 415);
+        const body = await request.text();
+        if (encoder.encode(body).length > 1024) return json({ error: 'Requisição muito grande.' }, 413);
+        let data;
+        try { data = JSON.parse(body); } catch { return json({ error: 'Dados inválidos.' }, 400); }
+        if (!data || data.confirmacao !== id) return json({ error: 'Confirme o imóvel que deseja excluir.' }, 400);
+        try {
+          if (!env.FOTOS && await env.DB.prepare("SELECT id FROM imoveis_fotos WHERE imovel_id = ? AND arquivo LIKE 'imoveis/%' LIMIT 1").bind(id).first()) return json({ error: 'Armazenamento de fotos indisponível. Tente novamente mais tarde.' }, 503);
+          // A seleção e as exclusões participam da mesma transação, incluindo as fotos.
+          const result = await env.DB.batch([
+            env.DB.prepare('SELECT arquivo FROM imoveis_fotos WHERE imovel_id = ?').bind(id),
+            env.DB.prepare('DELETE FROM imoveis_fotos WHERE imovel_id = ?').bind(id),
+            env.DB.prepare('DELETE FROM imoveis WHERE id = ?').bind(id)
+          ]);
+          if (!result[2].meta.changes) return json({ error: 'Imóvel não encontrado.' }, 404);
+          const safeKey = new RegExp(`^imoveis/${id}/[a-f0-9-]+\\.(jpg|png|webp)$`);
+          const keys = result[0].results.map(photo => photo.arquivo).filter(key => safeKey.test(key));
+          let cleanupPending = false;
+          if (keys.length) { try { await env.FOTOS.delete(keys); } catch { cleanupPending = true; console.error('Imóveis: limpeza de fotos pendente após exclusão.'); } }
+          return json({ deleted: true, cleanupPending });
+        } catch { return json({ error: 'Não foi possível excluir o imóvel. Tente novamente.' }, 503); }
+      }
       if (request.method === 'GET') {
         try {
           const columns = `id, ${PROPERTY_COLUMNS}, status, (SELECT CASE WHEN arquivo LIKE 'imoveis/%' THEN '/api/admin/fotos/' || id ELSE arquivo END FROM imoveis_fotos WHERE imovel_id = imoveis.id ORDER BY principal DESC, ordem, id LIMIT 1) AS foto_principal`;
@@ -225,7 +249,7 @@ export default {
           return json({ error: 'Não foi possível salvar o imóvel.' }, 503);
         }
       }
-      return json({ error: 'Método não permitido.' }, 405, { allow: id === null ? 'GET, POST' : 'GET, PUT' });
+      return json({ error: 'Método não permitido.' }, 405, { allow: id === null ? 'GET, POST' : 'GET, PUT, DELETE' });
     }
     return json({ error: 'Rota não encontrada.' }, 404);
   }
